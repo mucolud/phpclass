@@ -1,6 +1,8 @@
-<?php 
+<?php
+
 /*
  * 简单文件缓存类
+ * key:32位　value:128位　总共能存储１０００个ｋｅｙ
  */
 
 class Fcache
@@ -29,8 +31,8 @@ class Fcache
     public function init()
     {
         if (!fgetc($this->fhandle)) {
-            //写入10240个空位符，并首部标记已初始化
-            fwrite($this->fhandle, pack("cnnx10240", 1, 5, 10245));
+            //写入44000个空位符，并首部标记已初始化 1000key
+            fwrite($this->fhandle, pack("cLLx440000", 1, 9, 440009));
         }
     }
 
@@ -40,7 +42,7 @@ class Fcache
         if ($meta[0]) {
             if ($meta[0] == "exist") {
                 fseek($this->fhandle, $meta[1]['start']);
-                return fread($this->fhandle, 128);
+                return trim(fread($this->fhandle, 128));
             }
         }
 
@@ -53,54 +55,59 @@ class Fcache
         $meta = $this->find($key);
         $key = strlen($key) > 32 ? substr($key, 0, 32) : $key;
         $key = $key . str_repeat("", 32 - strlen($key));
-
+        $value = strlen($value) > 128 ? substr($value, 0, 128) : $value;
+        $value = $value . str_repeat("", 128 - strlen($value));
+       // var_dump($meta);
         // 已存在
         if ($meta[0] == "exist") {
             fseek($this->fhandle, $meta[1]['kstart']);
-            fwrite($this->fhandle, pack("a32LLL", $key, $meta[1]['start'], $meta[1]['end'], $expire));
+            fwrite($this->fhandle, pack("a32lll", $key, $meta[1]['start'], $meta[1]['end'], $expire));
             fseek($this->fhandle, $meta[1]['start']);
             fwrite($this->fhandle, pack("a128", $value));
+            flush($this->fhandle);
             return true;
         }
         //过去的key
         if ($meta[0] == "remove") {
             fseek($this->fhandle, $meta[1]['kstart']);
-            fwrite($this->fhandle, pack("a32LLL", $key, $meta[1]['start'], $meta[1]['end'], $expire));
+            fwrite($this->fhandle, pack("a32lll", $key, $meta[1]['start'], $meta[1]['end'], $expire));
             fseek($this->fhandle, $meta[1]['start']);
             fwrite($this->fhandle, pack("a128", $value));
+            flush($this->fhandle);
             return true;
         }
 
         //插入
         fseek($this->fhandle, $meta[1]['kend']);
-        fwrite($this->fhandle, pack("a32LLL", $key, $meta[1]['vend'], $meta[1]['vend'] + 128, $expire));
+        fwrite($this->fhandle, pack("a32lll", $key, $meta[1]['vend'], $meta[1]['vend'] + 128, $expire));
         fseek($this->fhandle, $meta[1]['vend']);
         fwrite($this->fhandle, pack("a128", $value));
         fseek($this->fhandle, 1);
-        fwrite($this->fhandle, pack("n", $meta[1]['kend'] + 44));
-        fseek($this->fhandle, 3);
-        fwrite($this->fhandle, pack("n", $meta[1]['vend'] + 128));
-
+        fwrite($this->fhandle, pack("L", $meta[1]['kend'] + 44));
+        fseek($this->fhandle, 5);
+        fwrite($this->fhandle, pack("L", $meta[1]['vend'] + 128));
+        flush($this->fhandle);
+        return true;
     }
 
     private function find($key)
     {
         fseek($this->fhandle, 0);
         //首先获取所有key的meta信息
-        $metas = fread($this->fhandle, 10245);
+        $metas = fread($this->fhandle, 440009);
         if (!$metas) {
             return false;
         }
 
-        $hmetas = unpack("ctag/nkend/nvend", $metas);
+        $hmetas = unpack("ctag/Lkend/Lvend", $metas);
 
         //遍历数据所有数据
-        $startIndex = 5;
+        $startIndex = 9;
         $keysMetas = [];
 
         for ($i = $startIndex; $i < strlen($metas); $i = $i + 44) {
             $tmp = substr($metas, $i, 44);
-            $meta = @unpack("a32key/Lstart/Lend/Lexpire", $tmp);
+            $meta = @unpack("a32key/lstart/lend/lexpire", $tmp);
 
             if ($meta && trim($meta['key']) != "") {
                 // var_dump($meta);
@@ -141,7 +148,8 @@ class Fcache
             fseek($this->fhandle, $meta[1]['start']);
             fwrite($this->fhandle, pack("a128", ""));
             fseek($this->fhandle, $meta[1]['kstart']);
-            fwrite($this->fhandle, pack("a32LLL", $key, $meta[1]['start'], $meta[1]['end'], -1));
+            fwrite($this->fhandle, pack("a32lll", $key, $meta[1]['start'], $meta[1]['end'], -1));
+            flush($this->fhandle);
         }
     }
 
